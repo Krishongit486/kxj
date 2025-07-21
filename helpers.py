@@ -1,12 +1,18 @@
-import docx2txt
 import re
+import os
+import numpy as np
+from PyPDF2 import PdfReader
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-def extract_text(path):
-    try:
-        doc = docx.Document(path)
-        return doc
-    except Exception as e:
-        raise ValueError(f"Error reading document: {e}")
+def extract_text_from_pdf(filepath):
+    reader = PdfReader(filepath)
+    all_text = ""
+    for page in reader.pages:
+        content = page.extract_text()
+        if content:
+            all_text += content + "\n"
+    return all_text
 
 def find_cover_type(prompt):
     prompt = prompt.lower()
@@ -14,82 +20,56 @@ def find_cover_type(prompt):
         return "domestic"
     elif "international" in prompt:
         return "international"
-    else:
+    return None
+
+def extract_section(text, heading):
+    pattern = re.compile(rf"{heading}", re.IGNORECASE)
+    match = pattern.search(text)
+    if not match:
         return None
+    start = match.end()
 
-def find_plan_justification(doc, cover_type, prompt):
-    if cover_type == "domestic":
-        table_heading = "table of benefits for domestic cover"
-        exclusion_heading = "exclusions - domestic cover"
-    else:
-        table_heading = "table of benefits for international cover"
-        exclusion_heading = "exclusions - international cover"
+    next_heading = re.search(r"(table of benefits|exclusions[\s\S]{0,20})", text[start:], re.IGNORECASE)
+    end = start + next_heading.start() if next_heading else len(text)
 
-    matched_table = None
-    table_found = False
-    for i, para in enumerate(doc.paragraphs):
-        if table_heading in para.text.strip().lower():
-            table_found = True
-            matched_table = get_nearest_table(doc, i)
-            break
+    return text[start:end].strip()
 
-    if not table_found or matched_table is None:
-        return f"{cover_type.capitalize()} Table Of Benefits section not found."
+def get_n_gram_match(plan_names, prompt, n=3):
+    vectorizer = CountVectorizer(analyzer='char_wb', ngram_range=(n, n))
+    all_texts = [prompt] + plan_names
+    vectors = vectorizer.fit_transform(all_texts)
+    sims = cosine_similarity(vectors[0:1], vectors[1:]).flatten()
+    idx = np.argmax(sims)
+    return plan_names[idx], sims[idx]
 
-    table_data = extract_table_data(matched_table)
+def find_plan_and_justification(text, prompt):
+    cover_type = find_cover_type(prompt)
+    if not cover_type:
+        return None, None, "Cover type not found in prompt."
 
-    # Match plan name in leftmost column
-    plan_name = prompt.lower()
-    matched_row = None
-    for row in table_data:
-        if len(row) > 0 and row[0].strip().lower() in plan_name:
-            matched_row = row
-            matched_plan_name = row[0].strip()
-            break
+    table_heading = f"table of benefits for {cover_type} cover"
+    exclusion_heading = f"exclusions - {cover_type} cover"
 
-    if not matched_row:
-        return "Plan not found in the selected table."
+    table_text = extract_section(text, table_heading)
+    exclusion_text = extract_section(text, exclusion_heading)
 
-    # Get exclusions section text
-    exclusion_text = ""
-    in_exclusion = False
-    for para in doc.paragraphs:
-        txt = para.text.strip().lower()
-        if exclusion_heading in txt:
-            in_exclusion = True
-            continue
-        if in_exclusion and ("table of benefits" in txt or "cover" in txt):
-            break
-        if in_exclusion:
-            exclusion_text += para.text + "\n"
+    if not table_text:
+        return None, None, f"{cover_type.capitalize()} benefits table not found."
+    if not exclusion_text:
+        return None, None, f"{cover_type.capitalize()} exclusions section not found."
 
-    # Match plan name in exclusions
+    # Step 1: Get plan names from the table (first word per line assumed)
+    lines = table_text.splitlines()
+    plan_names = [line.split()[0] if line.strip() else "" for line in lines if line.strip()]
+
+    # Step 2: Use n-gram similarity to match
+    best_plan, score = get_n_gram_match(plan_names, prompt)
+
+    # Step 3: Look for justification line from exclusions
     justification = ""
     for line in exclusion_text.splitlines():
-        if matched_plan_name.lower() in line.lower():
+        if best_plan.lower() in line.lower():
             justification = line
             break
 
-    return justification if justification else "Justification not found in exclusions."
-
-def get_nearest_table(doc, para_index, threshold=5):
-    """
-    Finds the table within 'threshold' paragraphs from the given index.
-    """
-    para_text = doc.paragraphs[para_index].text.strip()
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if para_text in cell.text:
-                    return table
-    # fallback: just return first table after heading para
-    for i in range(para_index, min(len(doc.paragraphs), para_index + threshold)):
-        if i < len(doc.tables):
-            return doc.tables[i]
-    return None
-
-def extract_table_data(table):
-    data = []
-    for row in table.rows:
-        data.append([cell.text.strip() for cell in row.cells])
-    return data
+    return best_plan, justification or "No justification found.", "Success"
