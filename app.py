@@ -1,37 +1,32 @@
 from flask import Flask, request, render_template, jsonify
-from helpers import extract_text_from_pdf, analyze_query
 import os
+from helpers import extract_text_from_pdf, find_cover_type, find_plan_info
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route('/')
-def home():
-    return render_template('index.html')
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        file = request.files.get("file")
+        prompt = request.form.get("prompt", "")
+        if not file or not prompt:
+            return render_template("index.html", error="Please upload a file and enter a prompt.")
 
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    if 'file' not in request.files or 'prompt' not in request.form:
-        return jsonify({"error": "Missing file or prompt"}), 400
+        filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+        file.save(filepath)
 
-    file = request.files['file']
-    prompt = request.form['prompt']
-
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
-
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    file.save(filepath)
-
-    try:
         text = extract_text_from_pdf(filepath)
-        result = analyze_query(text, prompt)
+        cover_type = find_cover_type(prompt)
 
-        return render_template('result.html', result=result)
+        if not cover_type:
+            return render_template("index.html", error="Prompt must mention either 'domestic' or 'international'.")
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        result = find_plan_info(text, prompt, cover_type)
+        return render_template("result.html", result=result)
 
-if __name__ == '__main__':
+    return render_template("index.html")
+
+if __name__ == "__main__":
     app.run(debug=True)
