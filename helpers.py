@@ -1,92 +1,50 @@
 import re
 import fitz  # PyMuPDF
 from sentence_transformers import SentenceTransformer, util
-from difflib import get_close_matches
+from sklearn.feature_extraction.text import CountVectorizer
+import numpy as np
+
 model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
+def extract_text_from_pdf(filepath):
+    doc = fitz.open(filepath)
+    return "\n".join([page.get_text() for page in doc])
 
-def extract_text_from_pdf(path):
-    doc = fitz.open(path)
-    text = "\n".join(page.get_text() for page in doc)
-    return text
+def get_ngrams(text, n=1):
+    vectorizer = CountVectorizer(ngram_range=(n, n), stop_words='english').fit([text])
+    return vectorizer.get_feature_names_out()
 
-def ngram_similarity(a, b):
-    a, b = a.lower(), b.lower()
-    n = 3
-    a_ngrams = {a[i:i+n] for i in range(len(a)-n+1)}
-    b_ngrams = {b[i:i+n] for i in range(len(b)-n+1)}
-    if not a_ngrams or not b_ngrams:
-        return 0
-    return len(a_ngrams & b_ngrams) / len(a_ngrams | b_ngrams)
+def semantic_search(clauses, query):
+    query_emb = model.encode(query, convert_to_tensor=True)
+    best_score = -1
+    best_match = None
 
-def find_cover_type(prompt):
-    prompt = prompt.lower()
-    if "international" in prompt or "abroad" in prompt or "foreign" in prompt:
-        return "international"
-    elif "domestic" in prompt or "india" in prompt or "within country" in prompt:
-        return "domestic"
-    return None
+    for clause in clauses:
+        if not clause.strip():
+            continue
+        clause_emb = model.encode(clause, convert_to_tensor=True)
+        score = util.cos_sim(query_emb, clause_emb).item()
+        if score > best_score:
+            best_score = score
+            best_match = clause
+    return best_match
 
-def extract_tables(text, cover_type):
-    # Simple heuristic split by section name
-    if cover_type == "domestic":
-        benefit_match = re.search(r'table of benefits\s*-\s*domestic.*?(exclusions\s*-\s*domestic|table of benefits\s*-\s*international)', text, re.I | re.S)
-        exclusion_match = re.search(r'exclusions\s*-\s*domestic.*?(table of benefits\s*-\s*international|exclusions\s*-\s*international|$)', text, re.I | re.S)
-    else:
-        benefit_match = re.search(r'table of benefits\s*-\s*international.*?(exclusions\s*-\s*international|$)', text, re.I | re.S)
-        exclusion_match = re.search(r'exclusions\s*-\s*international.*?$', text, re.I | re.S)
-
-    benefit_text = benefit_match.group(0) if benefit_match else ""
-    exclusion_text = exclusion_match.group(0) if exclusion_match else ""
-    return benefit_text.strip(), exclusion_text.strip()
-
-def find_best_plan_match(benefit_text, prompt):
-    rows = [line for line in benefit_text.split('\n') if line.strip()]
-    plan_candidates = []
-    for row in rows:
-        columns = [col.strip() for col in row.split("  ") if col.strip()]
-        if len(columns) > 1:
-            plan_candidates.append(columns)
-
-    best_row = None
-    best_score = 0
-    prompt = prompt.lower()
-
-    for row in plan_candidates:
-        plan = row[0].lower()
-        sim = ngram_similarity(plan, prompt)
-        if sim > best_score:
-            best_score = sim
-            best_row = row
-
-    return best_row, best_score
-
-def find_justification(exclusion_text, plan_name):
-    lines = exclusion_text.split('\n')
-    best_line = ""
-    best_score = 0
-    for line in lines:
-        sim = ngram_similarity(line, plan_name)
-        if sim > best_score:
-            best_score = sim
-            best_line = line
-    return best_line.strip()
-
-def analyze_query(file_path, prompt):
-    text = extract_text_from_pdf(file_path)
-    cover_type = find_cover_type(prompt)
-
-    if not cover_type:
+def analyze_query(text, query):
+    # Extract region
+    region = 'domestic' if 'domestic' in query.lower() else 'international' if 'international' in query.lower() else None
+    if not region:
         return {
             "plan_found": False,
             "amount": "N/A",
-            "justification": "Could not determine cover type.",
-            "summary": "Please specify if it's domestic or international."
+            "justification": "Could not determine whether domestic or international.",
+            "summary": "Your query must mention either 'domestic' or 'international'."
         }
 
-    benefit_text, exclusion_text = extract_tables(text, cover_type)
+    # Find relevant sections
+    benefit_section = extract_section(text, f"table of benefits for {region} cover")
+    exclusion_section = extract_section(text, f"exclusions")
 
-    if not benefit_text:
+    if not benefit_section:
         return {
             "plan_found": False,
             "amount": "N/A",
@@ -94,22 +52,44 @@ def analyze_query(file_path, prompt):
             "summary": "Unable to locate required sections in document."
         }
 
-    best_row, score = find_best_plan_match(benefit_text, prompt)
+    lines = benefit_section.split("\n")
+    plan_match = semantic_search(lines, query)
 
-    if not best_row or score < 0.3:
+    if not plan_match:
         return {
             "plan_found": False,
             "amount": "N/A",
-            "justification": "Plan not found in table.",
-            "summary": f"No matching plan found for the query under {cover_type} cover."
+            "justification": "Plan not found in benefits section.",
+            "summary": "We couldn't find any matching plan for your query."
         }
 
-    justification = find_justification(exclusion_text, best_row[0])
-    amount_data = ", ".join(best_row[1:]) if len(best_row) > 1 else "N/A"
+    # Extract amount (basic pattern)
+    amount_match = re.search(r'(₹|\$|INR|USD)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?', plan_match)
+    amount = amount_match.group() if amount_match else "N/A"
+
+    # Get plan name for exclusion search
+    plan_name = " ".join(plan_match.split()[:4])  # first few words
+    justification = semantic_search(exclusion_section.split("\n"), plan_name) if exclusion_section else "N/A"
 
     return {
         "plan_found": True,
-        "amount": amount_data,
-        "justification": justification or "No justification found in exclusions.",
-        "summary": f"The plan '{best_row[0]}' under {cover_type} cover includes the following: {amount_data}. Justification: {justification or 'Not available.'}"
+        "amount": amount,
+        "justification": justification,
+        "summary": f"✅ Plan identified as '{plan_name.strip()}'. Estimated coverage amount: {amount}. Justification: {justification or 'N/A'}"
     }
+
+def extract_section(text, heading):
+    lines = text.split("\n")
+    capture = False
+    section_lines = []
+
+    for line in lines:
+        if heading.lower() in line.lower():
+            capture = True
+            continue
+        elif capture and re.match(r'^[A-Z][a-z]+', line):  # next heading
+            break
+        if capture:
+            section_lines.append(line)
+
+    return "\n".join(section_lines)
