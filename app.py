@@ -1,37 +1,50 @@
 from flask import Flask, request, jsonify
-from helpers import extract_text, find_cover_type, find_plan_justification
 import os
+from werkzeug.utils import secure_filename
+from helpers import extract_text_from_pdf, find_plan_and_justification
+
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf'}
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Ensure upload folder exists
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route("/ask", methods=["POST"])
-def ask():
-    prompt = request.form.get("prompt", "")
-    file = request.files.get("file")
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    if 'file' not in request.files or 'prompt' not in request.form:
+        return jsonify({"error": "Missing file or prompt"}), 400
 
-    if not file or not file.filename.endswith('.docx'):
-        return jsonify({"error": "A valid .docx file must be uploaded."}), 400
+    file = request.files['file']
+    prompt = request.form['prompt']
 
-    # Save uploaded file
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type. Only PDF allowed"}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(filepath)
 
-    # Load and parse the document
-    doc = extract_text(filepath)
+    try:
+        text = extract_text_from_pdf(filepath)
+        plan, justification, status = find_plan_and_justification(text, prompt)
 
-    # Identify cover type from prompt
-    cover_type = find_cover_type(prompt)
-    if not cover_type:
-        return jsonify({"error": "Cover type not recognized. Must mention 'domestic' or 'international'."}), 400
+        if status != "Success":
+            return jsonify({"error": status}), 400
 
-    # Find plan justification
-    result = find_plan_justification(doc, cover_type, prompt)
-    return jsonify({"result": result})
+        return jsonify({
+            "plan_found": plan,
+            "justification": justification
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
+@app.route("/")
+def home():
+    return "API is running. Use POST /analyze with a PDF file and prompt."
+
+if __name__ == '__main__':
     app.run(debug=True)
-
