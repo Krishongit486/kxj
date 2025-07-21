@@ -1,0 +1,5 @@
+Flask==2.3.3
+PyPDF2==3.0.1
+scikit-learn==1.4.0
+numpy==1.26.4
+werkzeug==2.3.7
