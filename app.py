@@ -1,4 +1,4 @@
- from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template
 from helpers import analyze_query
 import os
 
