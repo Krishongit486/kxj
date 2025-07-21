@@ -1,7 +1,5 @@
 import re
 import PyPDF2
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 
 def extract_text_from_pdf(path):
@@ -25,7 +23,6 @@ def extract_section(text, start_heading, end_heading_keywords):
     if start_idx == -1:
         return ""
 
-    # Find the first end heading after the start heading
     end_idx = -1
     for end_heading in end_heading_keywords:
         end_idx = text.find(end_heading.lower(), start_idx + len(start_heading))
@@ -47,16 +44,27 @@ def extract_rows(section_text):
     return rows
 
 
+# --- NEW: Basic Jaccard similarity without external libraries ---
+def jaccard_similarity(a, b):
+    set_a = set(re.findall(r'\w+', a.lower()))
+    set_b = set(re.findall(r'\w+', b.lower()))
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a.intersection(set_b)) / len(set_a.union(set_b))
+
+
 def find_best_match(prompt, candidates):
-    vectorizer = TfidfVectorizer().fit_transform([prompt] + candidates)
-    vectors = vectorizer.toarray()
-    cosine = cosine_similarity([vectors[0]], vectors[1:])
-    best_index = cosine[0].argmax()
-    return candidates[best_index], cosine[0][best_index]
+    best_candidate = ""
+    best_score = 0
+    for candidate in candidates:
+        score = jaccard_similarity(prompt, candidate)
+        if score > best_score:
+            best_candidate = candidate
+            best_score = score
+    return best_candidate, best_score
 
 
 def find_plan_info(text, prompt, cover_type):
-    # Updated actual heading names from your document
     if cover_type == "domestic":
         table_headings = [
             "table of benefits for domestic cover",
@@ -70,7 +78,6 @@ def find_plan_info(text, prompt, cover_type):
         ]
         exclusion_heading = "exclusions for international cover"
 
-    # Try each possible table heading until one works
     table_section = ""
     for heading in table_headings:
         table_section = extract_section(
@@ -113,7 +120,6 @@ def find_plan_info(text, prompt, cover_type):
     matched_row = next((row for row in rows if best_plan.lower() in row[0].lower()), None)
     amount_info = dict(zip(headings[1:], matched_row[1:])) if matched_row and len(matched_row) > 1 else {"Amount": "N/A"}
 
-    # Extract exclusions section
     exclusion_section = extract_section(
         text,
         exclusion_heading,
