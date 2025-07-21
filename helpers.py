@@ -2,8 +2,8 @@ import re
 import fitz  # PyMuPDF
 from sentence_transformers import SentenceTransformer, util
 from difflib import get_close_matches
+model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_pdf(path):
     doc = fitz.open(path)
