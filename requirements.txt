@@ -1,8 +1,0 @@
-flask
-python-docx
-PyPDF2
-sentence_transformers
-regex
-nltk
-faiss
-docx
