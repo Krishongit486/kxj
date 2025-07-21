@@ -25,7 +25,7 @@ def extract_section(text, start_heading, end_heading_keywords):
     if start_idx == -1:
         return ""
 
-    # Find the first end heading after start
+    # Find the first end heading after the start heading
     end_idx = -1
     for end_heading in end_heading_keywords:
         end_idx = text.find(end_heading.lower(), start_idx + len(start_heading))
@@ -56,16 +56,31 @@ def find_best_match(prompt, candidates):
 
 
 def find_plan_info(text, prompt, cover_type):
+    # Updated actual heading names from your document
     if cover_type == "domestic":
-        table_heading = "table of benefits - domestic cover"
+        table_headings = [
+            "table of benefits for domestic cover",
+            "in-patient benefits for domestic cover"
+        ]
         exclusion_heading = "exclusions for domestic cover"
     else:
-        table_heading = "table of benefits - international cover"
+        table_headings = [
+            "table of benefits for international cover",
+            "in-patient benefits for international cover"
+        ]
         exclusion_heading = "exclusions for international cover"
 
-    table_section = extract_section(
-        text, table_heading, ["exclusions", "terms and conditions", "section"]
-    )
+    # Try each possible table heading until one works
+    table_section = ""
+    for heading in table_headings:
+        table_section = extract_section(
+            text,
+            heading,
+            ["exclusions", "terms and conditions", "section", "waiting period"]
+        )
+        if table_section:
+            break
+
     if not table_section:
         return {
             "plan_found": False,
@@ -95,24 +110,27 @@ def find_plan_info(text, prompt, cover_type):
             "summary": "Could not confidently match plan."
         }
 
-    matched_row = next((row for row in rows if row[0] == best_plan), None)
+    matched_row = next((row for row in rows if best_plan.lower() in row[0].lower()), None)
     amount_info = dict(zip(headings[1:], matched_row[1:])) if matched_row and len(matched_row) > 1 else {"Amount": "N/A"}
 
-    # Get justification
+    # Extract exclusions section
     exclusion_section = extract_section(
-        text, exclusion_heading, ["section", "appendix", "contact"]
+        text,
+        exclusion_heading,
+        ["section", "appendix", "contact", "waiting period"]
     )
+
     justification = ""
     for line in exclusion_section.splitlines():
         if best_plan.lower() in line.lower():
             justification = line.strip()
             break
+
     if not justification:
         justification = "Justification not found."
 
-    # Humanized summary
     summary = (
-        f"✅ Plan '{best_plan}' was matched from the {cover_type} benefits table.\n"
+        f"✅ Plan '{best_plan}' was matched from the {cover_type.upper()} benefits table.\n"
         f"💰 Amount Details: {amount_info}\n"
         f"📄 Justification: {justification}"
     )
