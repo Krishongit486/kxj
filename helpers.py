@@ -19,16 +19,16 @@ def find_cover_type(prompt):
 
 def extract_section(text, start_heading, end_heading_keywords):
     text = text.lower()
-    start_idx = text.find(start_heading.lower())
+    start_heading = start_heading.lower()
+    start_idx = text.find(start_heading)
     if start_idx == -1:
         return ""
-
     end_idx = -1
     for end_heading in end_heading_keywords:
-        end_idx = text.find(end_heading.lower(), start_idx + len(start_heading))
+        end_heading = end_heading.lower()
+        end_idx = text.find(end_heading, start_idx + len(start_heading))
         if end_idx != -1:
             break
-
     if end_idx == -1:
         return text[start_idx + len(start_heading):].strip()
     return text[start_idx + len(start_heading):end_idx].strip()
@@ -44,7 +44,6 @@ def extract_rows(section_text):
     return rows
 
 
-# --- NEW: Basic Jaccard similarity without external libraries ---
 def jaccard_similarity(a, b):
     set_a = set(re.findall(r'\w+', a.lower()))
     set_b = set(re.findall(r'\w+', b.lower()))
@@ -64,87 +63,84 @@ def find_best_match(prompt, candidates):
     return best_candidate, best_score
 
 
-def find_plan_info(text, prompt, cover_type):
-    if cover_type == "domestic":
-        table_headings = [
-            "table of benefits for domestic cover",
-            "in-patient benefits for domestic cover"
-        ]
-        exclusion_heading = "exclusions for domestic cover"
-    else:
-        table_headings = [
-            "table of benefits for international cover",
-            "in-patient benefits for international cover"
-        ]
-        exclusion_heading = "exclusions for international cover"
-
-    table_section = ""
-    for heading in table_headings:
-        table_section = extract_section(
-            text,
-            heading,
-            ["exclusions", "terms and conditions", "section", "waiting period"]
-        )
-        if table_section:
-            break
-
-    if not table_section:
+def find_plan_info(text, prompt):
+    # Step 1: Determine cover type
+    cover_type = find_cover_type(prompt)
+    if not cover_type:
         return {
             "plan_found": False,
             "amount": "N/A",
-            "justification": "Relevant table or exclusions section not found.",
-            "summary": "Unable to locate required sections in document."
+            "justification": "Prompt doesn't indicate domestic or international clearly.",
+            "summary": "Unable to determine cover type from prompt."
         }
 
+    # Step 2: Select proper headings
+    if cover_type == "domestic":
+        table_heading = "table of benefits for domestic cover"
+        in_patient_heading = "in-patient benefits for domestic cover"
+    else:
+        table_heading = "table of benefits for international cover"
+        in_patient_heading = "in-patient benefits for international cover"
+
+    # Step 3: Extract relevant sections
+    table_section = extract_section(text, table_heading, ["exclusions", "terms", "section", "waiting period"])
+    in_patient_section = extract_section(text, in_patient_heading, ["section", "appendix", "contact", "waiting period"])
+
+    if not table_section or not in_patient_section:
+        return {
+            "plan_found": False,
+            "amount": "N/A",
+            "justification": "Missing benefits or in-patient section.",
+            "summary": "Required sections could not be extracted."
+        }
+
+    # Step 4: Parse table and find match
     rows = extract_rows(table_section)
     if not rows or len(rows) < 2:
         return {
             "plan_found": False,
             "amount": "N/A",
-            "justification": "Table format not recognized.",
-            "summary": "Unable to extract table rows."
+            "justification": "Could not parse table properly.",
+            "summary": "Table format was not recognized."
         }
 
     headings = rows[0]
-    plan_candidates = [row[0] for row in rows[1:] if row]
+    plan_rows = rows[1:]
+    plan_candidates = [row[0] for row in plan_rows]
     best_plan, confidence = find_best_match(prompt, plan_candidates)
 
     if confidence < 0.3:
         return {
             "plan_found": False,
             "amount": "N/A",
-            "justification": "Plan not found with sufficient confidence.",
-            "summary": "Could not confidently match plan."
+            "justification": "Low confidence in plan match.",
+            "summary": "Plan could not be confidently matched."
         }
 
-    matched_row = next((row for row in rows if best_plan.lower() in row[0].lower()), None)
+    # Step 5: Extract corresponding amount row
+    matched_row = next((row for row in plan_rows if best_plan.lower() in row[0].lower()), None)
     amount_info = dict(zip(headings[1:], matched_row[1:])) if matched_row and len(matched_row) > 1 else {"Amount": "N/A"}
 
-    exclusion_section = extract_section(
-        text,
-        exclusion_heading,
-        ["section", "appendix", "contact", "waiting period"]
-    )
-
+    # Step 6: Extract justification from in-patient section
     justification = ""
-    for line in exclusion_section.splitlines():
-        if best_plan.lower() in line.lower():
-            justification = line.strip()
-            break
+    pattern = re.compile(rf"{re.escape(best_plan)}(.*?)(?=\n\S|\Z)", re.DOTALL | re.IGNORECASE)
+    match = pattern.search(in_patient_section)
+    if match:
+        justification = match.group(0).strip()
+    else:
+        justification = "Justification not found under in-patient benefits section."
 
-    if not justification:
-        justification = "Justification not found."
-
+    # Step 7: Prepare final response
     summary = (
-        f"✅ Plan '{best_plan}' was matched from the {cover_type.upper()} benefits table.\n"
+        f"✅ Plan matched: **{best_plan}** under **{cover_type.upper()}** cover.\n"
         f"💰 Amount Details: {amount_info}\n"
         f"📄 Justification: {justification}"
     )
 
     return {
         "plan_found": True,
+        "plan": best_plan,
         "amount": amount_info,
         "justification": justification,
         "summary": summary
     }
-
