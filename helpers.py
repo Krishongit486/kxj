@@ -9,6 +9,7 @@ def extract_text_from_pdf(path):
 
 
 def find_cover_type(prompt):
+    
     prompt = prompt.lower()
     if "domestic" in prompt:
         return "domestic"
