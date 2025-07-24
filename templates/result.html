@@ -1,29 +1,8 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Analysis Result</title>
-</head>
-<body>
-    <h1>Query Result</h1>
-    <p><strong>Prompt:</strong> {{ prompt }}</p>
-
-    {% if result.plan_found %}
-        <p><strong>✅ Plan Found:</strong> Yes</p>
-        <p><strong>💰 Amount:</strong></p>
-        <ul>
-            {% for k, v in result.amount.items() %}
-                <li>{{ k }}: {{ v }}</li>
-            {% endfor %}
-        </ul>
-        <p><strong>📄 Justification:</strong> {{ result.justification }}</p>
-        <p><strong>📝 Summary:</strong><br>{{ result.summary }}</p>
-    {% else %}
-        <p><strong>❌ Plan Found:</strong> No</p>
-        <p><strong>📄 Justification:</strong> {{ result.justification }}</p>
-        <p><strong>📝 Summary:</strong><br>{{ result.summary }}</p>
-    {% endif %}
-
-    <br><br>
-    <a href="{{ url_for('index') }}">🔙 Go Back</a>
-</body>
-</html>
+<h2>Query Result for: "{{ prompt }}"</h2>
+{% if result.plan_found %}
+  <pre>{{ result.summary }}</pre>
+{% else %}
+  <p>No plan could be confidently matched.</p>
+  <p><strong>Reason:</strong> {{ result.summary }}</p>
+{% endif %}
+<a href="{{ url_for('index') }}">← Back</a>
