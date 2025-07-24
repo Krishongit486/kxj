@@ -1,5 +1,5 @@
-from flask import Flask, request, render_template, redirect, url_for
-from helpers import extract_text_from_pdf, find_cover_type, find_plan_info
+from flask import Flask, request, render_template
+from helpers import extract_text_from_pdf, query_gemini
 import os
 
 app = Flask(__name__)
@@ -19,15 +19,12 @@ def index():
         file.save(filepath)
 
         full_text = extract_text_from_pdf(filepath)
-        cover_type = find_cover_type(prompt)
+        result = query_gemini(full_text, prompt)
 
-        if not cover_type:
-            return render_template("index.html", error="Please mention 'domestic' or 'international' in the prompt.")
-
-        result = find_plan_info(full_text, prompt, cover_type)
         return render_template("result.html", result=result, prompt=prompt)
 
     return render_template("index.html")
 
 if __name__ == "__main__":
     app.run(debug=True)
+
